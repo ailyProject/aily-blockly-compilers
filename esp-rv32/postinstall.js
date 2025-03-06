@@ -2,7 +2,6 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('path');
 
-
 // 确保 __dirname 有值，如果没有则使用当前工作目录
 const srcDir = __dirname || "";
 // 确保目标目录有值，空字符串会导致解压到当前目录
@@ -29,8 +28,8 @@ async function extractArchives() {
         }
 
         // 确保目标目录存在
-        if (!fs.existsSync(destDir)) {
-            console.error(`目标目录不存在: ${destDir}`);
+        if (!destDir) {
+            console.error('未设置目标目录');
             return;
         }
 
@@ -40,6 +39,10 @@ async function extractArchives() {
             return;
         }
 
+        if (!fs.existsSync(destDir)) {
+            console.log(`目标目录不存在，创建: ${destDir}`);
+            fs.mkdirSync(destDir, { recursive: true });
+        }
 
         // 读取目录并过滤出 .7z 文件
         const files = await readdir(srcDir);
