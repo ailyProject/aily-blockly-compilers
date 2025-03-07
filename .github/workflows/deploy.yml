@@ -78,10 +78,36 @@ jobs:
       #     cd ${{ matrix.package }}
       #     npm ci || npm install
       
-      # - name: Build package
-      #   run: |
-      #     cd ${{ matrix.package }}
-      #     npm run build --if-present
+      - name: Build package
+        run: |
+          cd ${{ matrix.package }}
+          npm run build --if-present
+      
+      - name: 检查构建的包内容和大小
+        run: |
+          cd ${{ matrix.package }}
+          echo "列出目录内容:"
+          find . -type f -name "*.7z" | xargs ls -la
+          echo "执行打包预演:"
+          npm pack --dry-run
+      
+      - name: 检查npm包内容
+        run: |
+          cd ${{ matrix.package }}
+          # 创建临时包查看内容
+          npm pack
+          PACK_FILE=$(find . -name "*.tgz")
+          echo "包文件: $PACK_FILE"
+          echo "包大小: $(du -sh $PACK_FILE)"
+          
+          # 解压查看内容
+          mkdir -p temp_extract
+          tar -xzf $PACK_FILE -C temp_extract
+          echo "包内容列表:"
+          find temp_extract -type f | sort
+          
+          # 检查大文件是否存在
+          find temp_extract -name "*.7z" | xargs ls -la
       
       - name: Publish to NPM
         env:
@@ -93,6 +119,13 @@ jobs:
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           echo "Current version: $CURRENT_VERSION"
+
+          # 确保所有大文件都包含在发布中
+          echo "检查大文件存在:"
+          find . -type f -name "*.7z" | xargs ls -la
+          
+          # 临时创建或修改.npmignore确保不会排除7z文件
+          echo "!*.7z" > .npmignore
           
           # 检查当前版本是否已在 NPM registry 上发布
           if npm view $PACKAGE_NAME@$CURRENT_VERSION version &> /dev/null; then
