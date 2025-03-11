@@ -1,12 +1,98 @@
 const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('path');
+const https = require('https');
+
+// test
 
 // 确保 __dirname 有值，如果没有则使用当前工作目录
 const srcDir = __dirname || "";
 // 确保目标目录有值，空字符串会导致解压到当前目录
 const destDir = process.env.AILY_COMPILERS_PATH || "";
 const _7zaPath = process.env.AILY_7ZA_PATH || "";
+const zipDownloadBaseUrl = process.env.AILY_ZIP_URL + '/compilers';
+
+
+function getZipFileName() {
+    // 读取package.json文件，获取name和version
+    const prefix = "@aily-project/compiler-";
+    const packageJson = require('./package.json');
+    const packageName = packageJson.name.replace(prefix, "");
+    const packageVersion = packageJson.version;
+    return `${packageName}@${packageVersion}.7z`;
+}
+
+
+function getZipFile() {
+    const zipFileName = getZipFileName();
+    const downloadUrl = `${zipDownloadBaseUrl}/${zipFileName}`;
+
+    return new Promise((resolve, reject) => {
+        console.log(`正在下载: ${downloadUrl}`);
+        const filePath = path.join(__dirname, zipFileName);
+
+        if (fs.existsSync(filePath)) {
+            console.log(`文件已存在: ${zipFileName}`);
+            resolve(zipFileName);
+            return;
+        }
+
+        const fileStream = fs.createWriteStream(filePath);
+
+        https.get(downloadUrl, (response) => {
+            if (response.statusCode !== 200) {
+                fileStream.close();
+                fs.unlink(filePath, () => { });
+                reject(new Error(`下载失败: 状态码 ${response.statusCode}`));
+                return;
+            }
+
+            // 获取文件总大小
+            const totalSize = parseInt(response.headers['content-length'] || 0, 10);
+            let downloadedSize = 0;
+            let lastPercentage = -1;
+
+            // 设置下载进度显示
+            response.on('data', (chunk) => {
+                downloadedSize += chunk.length;
+
+                // 计算下载百分比
+                if (totalSize > 0) {
+                    const percentage = Math.floor((downloadedSize / totalSize) * 100);
+
+                    // 每增加1%才更新进度，避免过多输出
+                    if (percentage > lastPercentage) {
+                        lastPercentage = percentage;
+                        const downloadSizeMB = (downloadedSize / (1024 * 1024)).toFixed(2);
+                        const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+                        process.stdout.write(`\r下载进度: ${percentage}% (${downloadSizeMB}MB / ${totalSizeMB}MB)`);
+                    }
+                }
+            });
+
+            response.pipe(fileStream);
+
+            fileStream.on('finish', () => {
+                fileStream.close();
+                // 输出换行，确保后续日志正常显示
+                if (totalSize > 0) {
+                    console.log('');
+                }
+                console.log(`成功下载 ${zipFileName}`);
+                resolve(zipFileName);
+            });
+
+            fileStream.on('error', (err) => {
+                fs.unlink(filePath, () => { });
+                reject(err);
+            });
+        }).on('error', (err) => {
+            fs.unlink(filePath, () => { });
+            reject(err);
+        });
+    });
+}
+
 
 // 使用传统的回调式 API 并用 Promise 包装
 function readdir(dir) {
@@ -44,42 +130,58 @@ async function extractArchives() {
             fs.mkdirSync(destDir, { recursive: true });
         }
 
-        // 读取目录并过滤出 .7z 文件
-        const files = await readdir(srcDir);
-        const archiveFiles = files.filter(file => path.extname(file).toLowerCase() === '.7z');
+        // 确保 ZIP URL 已设置
+        if (!process.env.AILY_ZIP_URL) {
+            throw new Error('未设置下载基础 URL (AILY_ZIP_URL 环境变量未设置)');
+        }
 
-        console.log(`找到 ${archiveFiles.length} 个 .7z 文件`);
-
-        // 处理每个压缩文件
-        for (const file of archiveFiles) {
-            if (!file) {
-                console.error('文件名为空，跳过');
-                continue;
-            }
-
-            const srcPath = path.join(srcDir, file);
-            console.log(`准备解压: ${srcPath}`);
-
+        if (!fs.existsSync(destDir)) {
+            console.log(`目标目录不存在，创建: ${destDir}`);
             try {
-                await unpack(srcPath, destDir);
-                console.log(`已解压 ${file} 到 ${destDir}`);
-
-                // // 重命名
-                // const newName = path.basename(file, '.7z');
-                // const destPath = path.join(destDir, newName);
-
-                // // 将newName中的@替换为_
-                // const newName2 = newName.replace('@', '_');
-                // const newPath = path.join(destDir, newName2);
-                // fs.renameSync(destPath, newPath);
-                // console.log(`已重命名 ${destPath} 为 ${newPath}`);
-
-            } catch (error) {
-                console.error(`解压 ${file} 失败:`, error);
+                fs.mkdirSync(destDir, { recursive: true });
+            } catch (mkdirErr) {
+                throw new Error(`无法创建目标目录: ${destDir}, 错误: ${mkdirErr.message}`);
             }
+        }
+
+        // 下载zip文件
+        let fileName;
+        try {
+            fileName = await getZipFile();
+        } catch (downloadErr) {
+            throw new Error(`无法下载zip文件: ${downloadErr.message}`);
+        }
+
+        // 检查下载的文件是否存在和大小是否正常
+        const zipFilePath = path.join(__dirname, fileName);
+        try {
+            const stats = fs.statSync(zipFilePath);
+            if (stats.size < 1048576) { // 1MB = 1024 * 1024 bytes
+                throw new Error(`下载的文件异常小 (${stats.size} 字节)，可能下载不完整或被截断`);
+            }
+            console.log(`文件大小: ${(stats.size / (1024 * 1024)).toFixed(2)}MB`);
+        } catch (statErr) {
+            if (statErr.code === 'ENOENT') {
+                throw new Error(`下载的文件不存在: ${zipFilePath}`);
+            } else {
+                throw new Error(`检查文件失败: ${statErr.message}`);
+            }
+        }
+
+        // 解压zip文件
+        try {
+            await unpack(zipFilePath, destDir);
+            console.log(`已解压 ${fileName} 到 ${destDir}`);
+
+            // 解压成功后可以删除压缩文件
+            // fs.unlinkSync(zipFilePath);
+            // console.log(`已删除临时文件: ${fileName}`);
+        } catch (unpackErr) {
+            throw new Error(`解压失败: ${unpackErr.message}`);
         }
     } catch (err) {
         console.error('无法读取目录:', err);
+        process.exit(1);
     }
 }
 
