@@ -15,15 +15,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: true
 
       - name: Detect changed packages
         id: set-matrix
         run: |
-          if git rev-parse HEAD~1 > /dev/null 2>&1; then
-            BASE_SHA=$(git rev-parse HEAD~1)
+          # 获取最后一次成功运行的提交SHA或默认为一个空树
+          git fetch origin refs/tags/last-deploy 2>/dev/null || true
+          if git rev-parse -q --verify refs/tags/last-deploy >/dev/null; then
+            BASE_SHA=$(git rev-parse refs/tags/last-deploy)
+            echo "Using last successful deploy tag as base: $BASE_SHA"
           else
-            BASE_SHA=$(git hash-object -t tree /dev/null)
+            echo "No last-deploy tag found, using first commit in history"
+            BASE_SHA=$(git rev-list --max-parents=0 HEAD)
           fi
           
           HEAD_SHA=${{ github.sha }}
@@ -35,11 +38,14 @@ jobs:
           CHANGED_PACKAGES=()
           
           for dir in $PACKAGE_DIRS; do
-            if git diff --quiet $BASE_SHA $HEAD_SHA -- "$dir"; then
+            if git diff --quiet --diff-filter=ACMRT $BASE_SHA $HEAD_SHA -- "$dir"; then
               echo "No changes in $dir"
             else
               echo "Detected changes in $dir"
-              CHANGED_PACKAGES+=("$dir")
+              # Only add first-level directories (no slashes in the path)
+               if [[ "$dir" != *"/"* ]]; then
+                 CHANGED_PACKAGES+=("$dir")
+               fi
             fi
           done
           
@@ -54,7 +60,7 @@ jobs:
 
   build-and-publish:
     needs: detect-changes
-    if: ${{ github.event_name == 'push' && needs.detect-changes.outputs.matrix != '{"package":[]}' && github.ref == 'refs/heads/deploy'}}
+    if: ${{ github.event_name == 'push' && needs.detect-changes.outputs.matrix != '{"package":[]}' && github.ref == 'refs/heads/deploy' }}
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
@@ -67,12 +73,11 @@ jobs:
         uses: actions/checkout@v3
         with:
           token: ${{ secrets.GHB_TOKEN }}
-          lfs: true
       
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '16'
+          node-version: '18'
           registry-url: 'https://registry.openjumper.cn'
       
       # - name: Install dependencies
@@ -80,36 +85,10 @@ jobs:
       #     cd ${{ matrix.package }}
       #     npm ci || npm install
       
-      - name: Build package
-        run: |
-          cd ${{ matrix.package }}
-          npm run build --if-present
-      
-      - name: 检查构建的包内容和大小
-        run: |
-          cd ${{ matrix.package }}
-          echo "列出目录内容:"
-          find . -type f -name "*.7z" | xargs ls -la
-          echo "执行打包预演:"
-          npm pack --dry-run
-      
-      - name: 检查npm包内容
-        run: |
-          cd ${{ matrix.package }}
-          # 创建临时包查看内容
-          npm pack
-          PACK_FILE=$(find . -name "*.tgz")
-          echo "包文件: $PACK_FILE"
-          echo "包大小: $(du -sh $PACK_FILE)"
-          
-          # 解压查看内容
-          mkdir -p temp_extract
-          tar -xzf $PACK_FILE -C temp_extract
-          echo "包内容列表:"
-          find temp_extract -type f | sort
-          
-          # 检查大文件是否存在
-          find temp_extract -name "*.7z" | xargs ls -la
+      # - name: Build package
+      #   run: |
+      #     cd ${{ matrix.package }}
+      #     npm run build --if-present
       
       - name: Publish to NPM
         env:
@@ -121,13 +100,6 @@ jobs:
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           echo "Current version: $CURRENT_VERSION"
-
-          # 确保所有大文件都包含在发布中
-          echo "检查大文件存在:"
-          find . -type f -name "*.7z" | xargs ls -la
-          
-          # 临时创建或修改.npmignore确保不会排除7z文件
-          echo "!*.7z" > .npmignore
           
           # 检查当前版本是否已在 NPM registry 上发布
           if npm view $PACKAGE_NAME@$CURRENT_VERSION version &> /dev/null; then
@@ -140,3 +112,19 @@ jobs:
           
           # 发布
           npm publish --access public
+  
+  update-last-deploy-tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GHB_TOKEN }}
+
+      # 添加此步骤作为工作流的最后一步
+      - name: Update last deploy tag
+        if: success()
+        run: |
+          git tag -f last-deploy ${{ github.sha }}
+          git push -f origin last-deploy
