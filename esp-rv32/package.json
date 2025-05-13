@@ -1,6 +1,6 @@
 {
   "name": "@aily-project/compiler-esp-rv32",
-  "version": "13.2.0",
+  "version": "14.2.0",
   "description": "",
   "main": "index.js",
   "scripts": {
