@@ -11,6 +11,28 @@ const _7zaPath = process.env.AILY_7ZA_PATH || "";
 const zipDownloadBaseUrl = process.env.AILY_ZIP_URL + '/compilers';
 
 
+// 重试函数封装
+async function withRetry(fn, maxRetries = 3, retryDelay = 1000) {
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            lastError = error;
+            console.log(`操作失败 (尝试 ${attempt}/${maxRetries}): ${error.message}`);
+
+            if (attempt < maxRetries) {
+                console.log(`等待 ${retryDelay / 1000} 秒后重试...`);
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+            }
+        }
+    }
+
+    throw new Error(`经过 ${maxRetries} 次尝试后操作仍然失败: ${lastError.message}`);
+}
+
+
 function getZipFileName() {
     // 读取package.json文件，获取name和version
     const prefix = "@aily-project/compiler-";
@@ -145,7 +167,8 @@ async function extractArchives() {
         // 下载zip文件
         let fileName;
         try {
-            fileName = await getZipFile();
+            fileName = await withRetry(getZipFile, 3, 2000);
+            console.log(`已下载文件: ${fileName}`);
         } catch (downloadErr) {
             throw new Error(`无法下载zip文件: ${downloadErr.message}`);
         }
@@ -168,7 +191,9 @@ async function extractArchives() {
 
         // 解压zip文件
         try {
-            await unpack(zipFilePath, destDir);
+            await withRetry(async () => {
+                await unpack(zipFilePath, destDir);
+            }, 3, 2000); // 最多重试3次，每次间隔2秒
             console.log(`已解压 ${fileName} 到 ${destDir}`);
 
             // 解压成功后可以删除压缩文件
