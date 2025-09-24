@@ -1,5 +1,5 @@
 {
-  "name": "@aily-project/xpack-arm-none-eabi-gcc",
+  "name": "@aily-project/compiler-xpack-arm-none-eabi-gcc",
   "version": "14.2.1",
   "description": "",
   "main": "index.js",
