@@ -1,6 +1,6 @@
 {
-  "name": "@aily-project/compiler-arm-none-eabi-gcc",
-  "version": "4.8.3",
+  "name": "@aily-project/compiler-xpack-arm-none-eabi-gcc",
+  "version": "14.2.1",
   "description": "",
   "main": "index.js",
   "scripts": {
